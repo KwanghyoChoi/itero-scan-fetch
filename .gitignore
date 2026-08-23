@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+node_modules/
+itero-downloads/
+.itero-chrome-profile/
+itero-chrome-cdp.log
+*.zip
+*.stl
+*.ply
+*.png
+*.jpg
+*.jpeg
+*.jsonl
+*.log

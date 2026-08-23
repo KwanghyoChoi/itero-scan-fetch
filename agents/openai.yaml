@@ -1,0 +1,4 @@
+interface:
+  display_name: "iTero 스캔 다운로드"
+  short_description: "MyiTero STL 스캔을 안전하게 다운로드"
+  default_prompt: "Use $itero-scan-fetch to download authorized iTero scan exports locally."

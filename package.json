@@ -1,0 +1,24 @@
+{
+  "name": "itero-scan-fetch",
+  "version": "0.1.0",
+  "description": "Authorized iTero STL export downloader using a local Chrome CDP session",
+  "type": "module",
+  "bin": {
+    "itero-scan-fetch": "./scripts/itero-download.mjs"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "for file in scripts/*.mjs; do node --check \"$file\"; done && zsh -n scripts/itero-chrome-cdp.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "^1.61.1"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KwanghyoChoi/itero-scan-fetch.git"
+  }
+}
