@@ -25,8 +25,22 @@ async function downloadTargets({ session, config, log, existingIds }) {
   for (const target of config.targets) {
     if (downloaded >= config.maxDownloads) break;
     let matched = false;
+    let everSearched = false;   // 검색이 한 번이라도 실제로 실행됐는가
     for (const query of searchForms(target)) {
-      await searchPatients(session.page, config.patientsUrl, query);
+      const status = await searchPatients(session.page, config.patientsUrl, query);
+
+      // "검색이 실행되지 않음"을 "결과 0건"으로 취급하면 안 된다. 후자는 대상이 없다는 뜻이고
+      // 전자는 아직 묻지 못했다는 뜻이다. 전체 목록을 그대로 훑으면 엉뚱한 행을 고르게 된다.
+      if (status === "not-executed") {
+        log(`대상 ${target}: 검색어 ${query} — 검색이 실행되지 않았습니다(전체 목록 그대로). 건너뜁니다.`);
+        continue;
+      }
+      everSearched = true;
+      if (status === "empty") {
+        log(`대상 ${target}: 검색어 ${query} — 검색됨, 결과 0건`);
+        continue;
+      }
+
       const candidates = await patientRows(session.page);
       const hits = candidates.filter(({ text }) => rowMatches(text, target));
       log(`대상 ${target}: 검색어 ${query}, 후보 ${candidates.length}행, 일치 ${hits.length}행`);
@@ -47,7 +61,15 @@ async function downloadTargets({ session, config, log, existingIds }) {
       }
       break;
     }
-    if (!matched) log(`대상을 찾지 못했습니다: ${target}`);
+    if (!matched) {
+      // 「없다」와 「묻지 못했다」를 구분해서 보고한다. 같은 문장으로 뭉치면
+      // 화면을 못 읽은 실패가 조용히 「대상 없음」으로 기록된다.
+      log(
+        everSearched
+          ? `대상을 찾지 못했습니다: ${target} (검색은 실행됨 — 실제로 결과가 없습니다)`
+          : `대상을 확인하지 못했습니다: ${target} (검색이 한 번도 실행되지 않았습니다 — 화면을 읽지 못한 것이지 대상이 없다는 뜻이 아닙니다)`,
+      );
+    }
   }
   return downloaded;
 }
