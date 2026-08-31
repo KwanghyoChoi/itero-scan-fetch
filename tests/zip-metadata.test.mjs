@@ -15,3 +15,11 @@ test("ZIP XML의 주문번호와 차트번호를 식별자로 사용한다", () 
 test("필수 XML 식별자가 없으면 명확히 실패한다", () => {
   assert.throws(() => parseExportMetadata("<Export />"), /OrderID|ChartNumber/);
 });
+
+test("OrderID 가 숫자가 아니면 거부한다", () => {
+  // OrderID 는 저장 파일 이름을 만드는 데 쓰인다. 경로를 벗어나는 값이 들어오면 안 된다.
+  assert.throws(
+    () => parseExportMetadata("<OrderID>../../escape</OrderID><ChartNumber>1234567</ChartNumber>"),
+    /OrderID 형식/u,
+  );
+});

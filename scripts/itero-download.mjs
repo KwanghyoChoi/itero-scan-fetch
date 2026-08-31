@@ -4,12 +4,22 @@ import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { connectBrowser } from "./browser-session.mjs";
+import { acquire, lockPathForPort, release, releaseOnExit } from "./session-lock.mjs";
 import { parseArgs, HELP_TEXT } from "./config.mjs";
 import { readCredentials } from "./credentials.mjs";
 import { login } from "./login.mjs";
 import { downloadPatientOrders } from "./order-export.mjs";
 import { rowMatches, searchForms } from "./patient-search.mjs";
 import { openPatientList, openPatientRow, patientRows, searchPatients } from "./patient-pages.mjs";
+
+// 로그는 파일로 남고 이슈에 붙기도 한다. 사람을 가리키는 값은 기본적으로 가린다.
+// 전체 값이 필요하면 --verbose 로 켠다.
+const VERBOSE = process.argv.includes("--verbose");
+function mask(value) {
+  const text = String(value ?? "");
+  if (VERBOSE || text.length <= 2) return text;
+  return `${text.slice(0, 1)}${"*".repeat(text.length - 2)}${text.slice(-1)}`;
+}
 
 function existingOrderIds(destination) {
   return new Set(
@@ -32,18 +42,18 @@ async function downloadTargets({ session, config, log, existingIds }) {
       // "검색이 실행되지 않음"을 "결과 0건"으로 취급하면 안 된다. 후자는 대상이 없다는 뜻이고
       // 전자는 아직 묻지 못했다는 뜻이다. 전체 목록을 그대로 훑으면 엉뚱한 행을 고르게 된다.
       if (status === "not-executed") {
-        log(`대상 ${target}: 검색어 ${query} — 검색이 실행되지 않았습니다(전체 목록 그대로). 건너뜁니다.`);
+        log(`대상 ${mask(target)}: 검색어 ${mask(query)} — 검색이 실행되지 않았습니다(전체 목록 그대로). 건너뜁니다.`);
         continue;
       }
       everSearched = true;
       if (status === "empty") {
-        log(`대상 ${target}: 검색어 ${query} — 검색됨, 결과 0건`);
+        log(`대상 ${mask(target)}: 검색어 ${mask(query)} — 검색됨, 결과 0건`);
         continue;
       }
 
       const candidates = await patientRows(session.page);
       const hits = candidates.filter(({ text }) => rowMatches(text, target));
-      log(`대상 ${target}: 검색어 ${query}, 후보 ${candidates.length}행, 일치 ${hits.length}행`);
+      log(`대상 ${mask(target)}: 검색어 ${mask(query)}, 후보 ${candidates.length}행, 일치 ${hits.length}행`);
       if (!hits.length) continue;
       matched = true;
       for (let hitIndex = 0; hitIndex < hits.length; hitIndex += 1) {
@@ -96,6 +106,21 @@ async function downloadPatientCount({ session, config, log, existingIds }) {
 export async function run(config, dependencies = {}) {
   const log = dependencies.log || ((message) => console.log(`[itero] ${message}`));
   const credentials = dependencies.credentials || readCredentials(config.credentialsFile);
+  // 같은 CDP 크롬을 두 프로세스가 동시에 몰면 서로의 검색을 덮어쓴다 — 줄을 세운다.
+  // 세션을 직접 넘겨받은 경우(테스트·상위 도구)는 그쪽이 동시성을 책임지므로 잠그지 않는다.
+  const lockPath = dependencies.lockPath ?? lockPathForPort(config.cdpPort);
+  let locked = false;
+  if (!dependencies.session) {
+    releaseOnExit(lockPath);
+    locked = await acquire(lockPath, { log });
+    if (!locked) {
+      const error = new Error(
+        "다른 다운로드가 10분 넘게 진행 중입니다 — 끝난 뒤 다시 실행하세요 "
+        + "(동시에 돌리면 같은 탭에서 서로의 검색을 덮어씁니다)");
+      error.exitCode = 6;
+      throw error;
+    }
+  }
   const session = dependencies.session || await connectBrowser({
     cdpPort: config.cdpPort,
     destination: config.destination,
@@ -111,6 +136,7 @@ export async function run(config, dependencies = {}) {
     return downloaded;
   } finally {
     await session.browser.close();
+    if (locked) release(lockPath);   // 다음 요청이 곧바로 이어받게 한다
   }
 }
 
@@ -124,7 +150,7 @@ async function main() {
     await run(config);
   } catch (error) {
     console.error(`[itero] 실패: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
+    process.exitCode = error?.exitCode ?? 1;   // 6 = 다른 다운로드가 진행 중(실패가 아니라 순서)
   }
 }
 

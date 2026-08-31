@@ -2,7 +2,7 @@ import { existsSync, readdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseOrderRow, selectOrderRows } from "./order-utils.mjs";
-import { exportFileName, readZipMetadata } from "./zip-metadata.mjs";
+import { exportFileName, readZipMetadata, verifyZipIntegrity } from "./zip-metadata.mjs";
 import { orderTexts } from "./patient-pages.mjs";
 
 async function chooseExportOption(page, label, option) {
@@ -14,14 +14,33 @@ async function chooseExportOption(page, label, option) {
   await page.waitForTimeout(500);
 }
 
-function freshDownload(destination, before) {
-  const candidate = readdirSync(destination).find((name) => {
-    return !before.has(name) && !name.endsWith(".crdownload");
-  });
-  return candidate ? join(destination, candidate) : null;
+/**
+ * 다운로드 이벤트를 놓쳤을 때의 대비책.
+ *
+ * "새로 생긴 파일"이 **내가 받으려던 그 파일이라는 보장은 없다.** 동시에 끝난 다른 내보내기나
+ * 앞선 시도의 늦은 착지가 그 자리에 있을 수 있다. 그대로 집으면 기록은 A 인데 내용은 B 가 된다.
+ * 그래서 집기 전에 ZIP 안 XML 의 OrderID 가 지금 받는 주문과 같은지 확인한다.
+ */
+function freshDownload(destination, before, expectedOrderId, log) {
+  const candidates = readdirSync(destination).filter(
+    (name) => !before.has(name) && !name.endsWith(".crdownload"),
+  );
+  for (const name of candidates) {
+    const path = join(destination, name);
+    try {
+      const metadata = readZipMetadata(path);
+      if (!expectedOrderId || String(metadata.orderId) === String(expectedOrderId)) return path;
+    } catch {
+      // 읽히지 않는 파일은 후보가 아니다(아직 쓰는 중이거나 손상).
+    }
+  }
+  if (candidates.length && log) {
+    log(`새로 생긴 파일 ${candidates.length}개가 있었지만 주문번호가 달라 사용하지 않았습니다`);
+  }
+  return null;
 }
 
-async function waitForDownload({ downloadPromise, destination, before }) {
+async function waitForDownload({ downloadPromise, destination, before, expectedOrderId, log }) {
   try {
     const guid = await downloadPromise;
     const path = join(destination, guid);
@@ -30,11 +49,11 @@ async function waitForDownload({ downloadPromise, destination, before }) {
     }
     if (existsSync(path)) return path;
   } catch (error) {
-    const fallback = freshDownload(destination, before);
+    const fallback = freshDownload(destination, before, expectedOrderId, log);
     if (fallback) return fallback;
     throw error;
   }
-  const fallback = freshDownload(destination, before);
+  const fallback = freshDownload(destination, before, expectedOrderId, log);
   if (fallback) return fallback;
   throw new Error("다운로드 이벤트는 끝났지만 파일을 찾지 못했습니다");
 }
@@ -54,7 +73,16 @@ async function exportOrder({ page, row, tracker, config, log, expectedChartNumbe
     downloadPromise,
     destination: config.destination,
     before,
+    expectedOrderId: row.orderId,
+    log,
   });
+  // 내용을 확인할 수 없는 파일은 "받았다"로 세지 않는다. 격리해 두면 나중에 열어볼 수 있다.
+  const integrity = verifyZipIntegrity(downloadedPath);
+  if (!integrity.ok) {
+    const brokenPath = join(config.destination, `invalid-${row.orderId}-${Date.now()}.zip`);
+    renameSync(downloadedPath, brokenPath);
+    throw new Error(`받은 파일이 온전하지 않습니다 — ${integrity.reason}`);
+  }
   const metadata = readZipMetadata(downloadedPath);
   if (expectedChartNumber && metadata.chartNumber !== expectedChartNumber) {
     const rejectedPath = join(config.destination, `unverified-${metadata.orderId}-${Date.now()}.zip`);
@@ -63,7 +91,7 @@ async function exportOrder({ page, row, tracker, config, log, expectedChartNumbe
   }
   const targetPath = join(config.destination, exportFileName(metadata.orderId));
   renameSync(downloadedPath, targetPath);
-  log(`저장 완료: ${exportFileName(metadata.orderId)} (${(statSync(targetPath).size / 1e6).toFixed(1)} MB)`);
+  log(`저장 완료: ${exportFileName(metadata.orderId)} (${(statSync(targetPath).size / 1e6).toFixed(1)} MB · STL ${integrity.stlCount}개 · 무결성 확인)`);
   await page.goto(page.url().split("?")[0], { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2500);
   return metadata;

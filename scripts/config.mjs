@@ -37,6 +37,38 @@ function positiveInteger(value, optionName) {
   return number;
 }
 
+// 설정으로 받은 주소는 **로그인 정보를 보내는 곳**이다. 형태를 확인하지 않으면
+// 잘못된 값 하나로 자격 증명이 엉뚱한 서버로 간다. https 와 허용 호스트만 받는다.
+const ALLOWED_HOST_SUFFIXES = ["myitero.com", "iterocloud.com", "aligntech.com"];
+
+export function assertSafeUrl(value, optionName) {
+  let url;
+  try {
+    url = new URL(String(value));
+  } catch {
+    throw new Error(`${optionName} 주소 형식이 올바르지 않습니다: ${value}`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error(`${optionName} 는 http/https 만 허용합니다: ${value}`);
+  }
+  const host = url.hostname.toLowerCase();
+  const allowed = ALLOWED_HOST_SUFFIXES.some(
+    (suffix) => host === suffix || host.endsWith(`.${suffix}`),
+  );
+  if (!allowed) {
+    throw new Error(`${optionName} 는 허용되지 않은 호스트입니다: ${host}`);
+  }
+  return String(value);
+}
+
+export function assertPort(value, optionName) {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error(`${optionName} 는 1024~65535 사이의 정수여야 합니다: ${value}`);
+  }
+  return String(port);
+}
+
 export function parseArgs(argv, environment = process.env) {
   if (argv.includes("--help")) return { help: true };
   const rawTargets = optionValue(argv, "targets", "");
@@ -60,9 +92,9 @@ export function parseArgs(argv, environment = process.env) {
     credentialsFile: optionValue(argv, "credentials", environment.ITERO_CREDENTIALS_FILE || join(process.cwd(), ".env.itero")),
     maxDownloads: maxValue ? positiveInteger(maxValue, "--max-downloads") : Number.POSITIVE_INFINITY,
     downloadTimeoutMs: positiveInteger(timeoutValue, "--download-timeout") * 1000,
-    cdpPort: optionValue(argv, "cdp-port", environment.ITERO_CDP_PORT || "9334"),
-    baseUrl: optionValue(argv, "base-url", environment.ITERO_BASE_URL || "https://myitero.com"),
-    patientsUrl: optionValue(argv, "patients-url", environment.ITERO_PATIENTS_URL || "https://bff.cloud.myitero.com/doctors/patients"),
+    cdpPort: assertPort(optionValue(argv, "cdp-port", environment.ITERO_CDP_PORT || "9334"), "--cdp-port"),
+    baseUrl: assertSafeUrl(optionValue(argv, "base-url", environment.ITERO_BASE_URL || "https://myitero.com"), "--base-url"),
+    patientsUrl: assertSafeUrl(optionValue(argv, "patients-url", environment.ITERO_PATIENTS_URL || "https://bff.cloud.myitero.com/doctors/patients"), "--patients-url"),
     endpoints: argv.includes("--endpoints"),
   };
 }
