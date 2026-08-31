@@ -19,6 +19,33 @@ const SEARCH_BUTTON = [
   'button:has([class*="search" i])',
 ].join(", ");
 
+/**
+ * 돋보기를 **위치로** 찾는다 — 클래스·aria 로 맞히지 못하는 화면이 있다.
+ * 실측(2026-09-01): 실제 실행 버튼의 클래스는 `btn btn-primary btn-sm btn-glyph-only` 로
+ * `search` 라는 낱말이 어디에도 없고 aria-label·title·type=submit 도 없다.
+ * 그때 `button:has([class*="search"])` 는 **다른 버튼을 눌러** 검색이 돌지 않았다.
+ * 위치는 화면이 바뀌어도 잘 안 변한다 — 입력창 바로 오른쪽에 붙어 있다는 사실로 고른다.
+ */
+async function clickSearchButtonByPosition(page, searchBox) {
+  const box = await searchBox.boundingBox().catch(() => null);
+  if (!box) return false;
+  return page.evaluate(({ x, y, width, height }) => {
+    const centerY = y + height / 2;
+    let best = null;
+    for (const element of document.querySelectorAll('button,[role="button"],a')) {
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) continue;
+      if (rect.top > centerY || rect.bottom < centerY) continue;   // 세로로 겹칠 것
+      const gap = rect.left - (x + width);
+      if (gap < -4 || gap > 60) continue;                          // 오른쪽 60px 안
+      if (!best || gap < best.gap) best = { gap, element };
+    }
+    if (!best) return false;
+    best.element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    return true;
+  }, box).catch(() => false);
+}
+
 async function rowTexts(page, limit = 50) {
   const rows = page.locator("table tbody tr");
   const count = Math.min(await rows.count(), limit);
@@ -62,25 +89,34 @@ export async function searchPatients(page, patientsUrl, query) {
       triggered = false;
     }
   }
+  if (!triggered) triggered = await clickSearchButtonByPosition(page, searchBox);
   if (!triggered) await searchBox.press("Enter");
 
   await page.waitForTimeout(3000);
 
   const afterRows = await rowTexts(page);
   const pageText = await page.locator("body").innerText().catch(() => "");
-  let status = classifySearch({ beforeRows, afterRows, pageText });
+  // 검색 직후 입력창 값도 같이 넘긴다 — 값이 바뀌어 있으면 그 결과는 내 질의의 것이 아니다.
+  const boxValue = await searchBox.inputValue().catch(() => null);
+  let status = classifySearch({ beforeRows, afterRows, pageText, query, boxValue });
 
   // 실행 자체가 안 된 경우에 한해 한 번 더 시도한다(버튼 렌더가 늦는 화면 대비).
   if (status === "not-executed") {
+    // 값이 어긋났을 수 있으니 다시 넣고 실행한다.
+    await searchBox.fill("");
+    await searchBox.fill(query);
     if (await button.count()) {
       await button.click({ timeout: 5000 }).catch(() => {});
-    } else {
+    } else if (!(await clickSearchButtonByPosition(page, searchBox))) {
       await searchBox.press("Enter");
     }
     await page.waitForTimeout(3000);
     const retryRows = await rowTexts(page);
     const retryText = await page.locator("body").innerText().catch(() => "");
-    status = classifySearch({ beforeRows, afterRows: retryRows, pageText: retryText });
+    const retryValue = await searchBox.inputValue().catch(() => null);
+    status = classifySearch({
+      beforeRows, afterRows: retryRows, pageText: retryText, query, boxValue: retryValue,
+    });
   }
 
   return status;

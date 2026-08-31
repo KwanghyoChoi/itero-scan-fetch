@@ -24,6 +24,8 @@ typeset -a chrome_args
 chrome_args=(
   "--remote-debugging-port=$PORT"
   "--user-data-dir=$PROFILE_DIR"
+  # 헤드리스 기본 창은 800px대라 좁다 — 화면 위치로 버튼을 고르는 코드가 흔들린다(2026-09-01 실측).
+  "--window-size=1600,1000"
   "--no-first-run"
   "--no-default-browser-check"
 )
